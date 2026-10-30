@@ -1,0 +1,15 @@
+name = "nutrimate-live"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# Free-tier KV namespace used to cache the latest scraped prices.
+# Create it with: npx wrangler kv namespace create PRICES
+# then paste the id it prints into the line below.
+kv_namespaces = [
+  { binding = "PRICES", id = "95c57df74b88406cb827f6979307cf07" }
+]
+
+# Runs the price refresh automatically. This example runs every 6 hours.
+# Cron syntax: minute hour day month weekday
+[triggers]
+crons = ["0 */6 * * *"]
