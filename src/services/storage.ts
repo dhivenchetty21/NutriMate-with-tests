@@ -153,22 +153,30 @@ async function readRemoteOnce(): Promise<Partial<HouseholdDoc> | null> {
         try {
           const id = await resolveStorageId();
 
-          // Fetching the ID token makes Firestore use the newly signed-in user.
-          const authUser = getAuthInstance()?.currentUser;
-          if (activeUserId && authUser) {
-            await authUser.getIdToken();
-          }
-
           // With a saved copy on the phone, don't make the user wait for a slow network.
           const hasLocalCopy = (await readLocal(PROFILE_KEY)) !== null;
+
+          // The token refresh and the read are both network calls that can stall, so the
+          // time limit covers them together.
+          const fetchHousehold = async () => {
+            // Fetching the ID token makes Firestore use the newly signed-in user.
+            const authUser = getAuthInstance()?.currentUser;
+            if (activeUserId && authUser) {
+              await authUser.getIdToken();
+            }
+            return getDoc(doc(db, 'households', id));
+          };
+
+          console.log('[storage] remote read start');
           const snap = await withTimeout(
-            getDoc(doc(db, 'households', id)),
+            fetchHousehold(),
             hasLocalCopy ? REMOTE_READ_TIMEOUT_WITH_LOCAL_MS : REMOTE_READ_TIMEOUT_NO_LOCAL_MS,
           );
           if (snap === null) {
             console.warn('[storage] Firestore read timed out, falling back to local cache');
             return null;
           }
+          console.log('[storage] remote read done');
           return snap.exists() ? (snap.data() as HouseholdDoc) : null;
         } catch (err) {
           const isLastAttempt = attempt === PERMISSION_DENIED_RETRY_DELAYS_MS.length;

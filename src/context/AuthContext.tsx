@@ -1,10 +1,9 @@
-// Login state: sign up, sign in and sign out with Firebase Auth.
 import {
   User,
   createUserWithEmailAndPassword,
+  signOut as firebaseSignOut,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  signOut as firebaseSignOut,
   updateProfile as updateFirebaseProfile,
 } from 'firebase/auth';
 import {
@@ -21,13 +20,13 @@ import { getAuthInstance, isAuthConfigured } from '../services/firebase';
 import { setActiveStorageUser } from '../services/storage';
 
 type AuthContextValue = {
-  /** True once Firebase has been pointed at a real project (see .env). */
+  /** True once Firebase is configured (see .env). */
   isAuthConfigured: boolean;
-  /** True while the initial sign-in state is still being resolved. */
+  /** True while the saved session is being restored. */
   isLoading: boolean;
   user: User | null;
-  /** Name entered at sign-up. Kept separately because Firebase saves it after
-   * the account is created, so `user.displayName` is still empty at first. */
+  /** Name entered at sign-up. Firebase sets it after the account is created, so it is kept here.
+   * as well as on `user`. */
   displayName: string | null;
   error: string | null;
   signUp: (name: string, email: string, password: string) => Promise<boolean>;
@@ -65,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const configured = isAuthConfigured();
   const [user, setUser] = useState<User | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
-  // Without Firebase there is no sign-in state to wait for.
+  // Without Firebase config there is nothing to wait for, so no loading gate.
   const [isLoading, setIsLoading] = useState(configured);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,18 +73,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const auth = getAuthInstance();
     if (!auth) {
+      console.warn('[auth] no auth instance, continuing signed out');
       setIsLoading(false);
       return;
     }
 
+    console.log('[auth] waiting for first auth state');
+    // If Firebase never answers, stop waiting and show Login instead of a spinner.
+    const failsafe = setTimeout(() => {
+      console.warn('[auth] no response after 8s, continuing signed out');
+      setIsLoading(false);
+    }, 8000);
+
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      clearTimeout(failsafe);
+      console.log('[auth] state:', nextUser ? 'signed in' : 'signed out');
       setActiveStorageUser(nextUser ? nextUser.uid : null);
       setUser(nextUser);
       setDisplayName(nextUser?.displayName ?? null);
       setIsLoading(false);
     });
 
-    return unsubscribe;
+    return () => {
+      clearTimeout(failsafe);
+      unsubscribe();
+    };
   }, [configured]);
 
   async function signUp(name: string, email: string, password: string): Promise<boolean> {
@@ -125,8 +137,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!auth) return;
     await firebaseSignOut(auth);
     clearDynamicRecipes();
-    // The local copy is kept on purpose: it is stored per account, and wiping
-    // it made a failed cloud read look like a new account (onboarding again).
+    // The local cache is kept on sign-out. It is stored per user (see storage.ts),
+    // so the next account cannot see it and this account's data survives a failed sync.
   }
 
   function clearError() {

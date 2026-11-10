@@ -16,8 +16,8 @@ import {
   WorkSans_700Bold,
   WorkSans_800ExtraBold,
 } from '@expo-google-fonts/work-sans';
-import { Stack, useRouter, useSegments } from 'expo-router';
 import { useFonts } from 'expo-font';
+import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
@@ -29,25 +29,14 @@ import { colors } from '../theme/colors';
 SplashScreen.preventAutoHideAsync();
 
 /**
- * Route protection: signed-out users are sent to Login, and signed-in users
- * are sent away from Login/Sign up. Does nothing if Firebase is not configured.
+ * Route protection with Expo Router's Stack.Protected: signed-out users can only
+ * reach Login and Sign up, and signed-in users cannot reach them. Expo Router
+ * redirects automatically when the guard changes, so there is no redirect effect
+ * to get lost and the app screens never flash while signed out.
+ * Without Firebase config the app runs in local mode and Login is not used.
  */
-function AuthGate({ children }: { children: React.ReactNode }) {
+function RootNavigator() {
   const { isAuthConfigured, isLoading, user } = useAuth();
-  const segments = useSegments();
-  const router = useRouter();
-
-  const onAuthScreen = segments[0] === 'login' || segments[0] === 'signup';
-
-  useEffect(() => {
-    if (!isAuthConfigured || isLoading) return;
-
-    if (!user && !onAuthScreen) {
-      router.replace('/login');
-    } else if (user && onAuthScreen) {
-      router.replace('/');
-    }
-  }, [isAuthConfigured, isLoading, user, onAuthScreen, router]);
 
   if (isAuthConfigured && isLoading) {
     return (
@@ -57,19 +46,29 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Signed out and not on Login/Sign up: keep the navigator mounted so the redirect
-  // above can run, but cover the screens so they never flash.
-  const blocked = isAuthConfigured && !user && !onAuthScreen;
+  const signedIn = !isAuthConfigured || user !== null;
 
   return (
-    <View style={styles.gate}>
-      {children}
-      {blocked && (
-        <View style={[StyleSheet.absoluteFill, styles.authLoading]}>
-          <ActivityIndicator size="large" color={colors.forest} />
-        </View>
-      )}
-    </View>
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Protected guard={signedIn}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen
+          name="onboarding"
+          options={{ presentation: 'fullScreenModal', gestureEnabled: false }}
+        />
+        <Stack.Screen name="profile" />
+        <Stack.Screen name="meal/[id]" />
+        <Stack.Screen name="meal-plan" />
+        <Stack.Screen name="grocery-list" />
+        <Stack.Screen name="price-comparison" />
+        <Stack.Screen name="add-price-item" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="plan-history" />
+      </Stack.Protected>
+      <Stack.Protected guard={!signedIn}>
+        <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
+        <Stack.Screen name="signup" options={{ presentation: 'fullScreenModal' }} />
+      </Stack.Protected>
+    </Stack>
   );
 }
 
@@ -101,33 +100,13 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <AppProvider>
-        <AuthGate>
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen
-              name="onboarding"
-              options={{ presentation: 'fullScreenModal', gestureEnabled: false }}
-            />
-            <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
-            <Stack.Screen name="signup" options={{ presentation: 'fullScreenModal' }} />
-            <Stack.Screen name="profile" />
-            <Stack.Screen name="meal/[id]" />
-            <Stack.Screen name="meal-plan" />
-            <Stack.Screen name="grocery-list" />
-            <Stack.Screen name="price-comparison" />
-            <Stack.Screen name="add-price-item" options={{ presentation: 'modal' }} />
-            <Stack.Screen name="plan-history" />
-          </Stack>
-        </AuthGate>
+        <RootNavigator />
       </AppProvider>
     </AuthProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  gate: {
-    flex: 1,
-  },
   authLoading: {
     flex: 1,
     alignItems: 'center',
