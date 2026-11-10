@@ -2,8 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 import {
-  defaultPlannedMeals,
   defaultPantryItems,
+  defaultPlannedMeals,
   defaultProfile,
 } from '../data/mockData';
 import {
@@ -110,6 +110,30 @@ function isPermissionDenied(err: unknown): boolean {
 // token catches up. Retry "permission denied" errors after these delays (ms).
 const PERMISSION_DENIED_RETRY_DELAYS_MS = [500, 1000, 2000];
 
+// Resolves with null if the promise takes longer than ms, so a slow or missing
+// network cannot hold the app on its loading screen.
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise<T | null>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+// How long start-up waits for Firestore. With a saved copy on the phone the wait
+// is short; with no copy (fresh install) it is longer so an existing user is not
+// mistaken for a new one.
+const REMOTE_READ_TIMEOUT_WITH_LOCAL_MS = 2500;
+const REMOTE_READ_TIMEOUT_NO_LOCAL_MS = 8000;
+
 async function readRemoteOnce(): Promise<Partial<HouseholdDoc> | null> {
   if (!remoteReadPromise) {
     remoteReadPromise = (async () => {
@@ -135,7 +159,16 @@ async function readRemoteOnce(): Promise<Partial<HouseholdDoc> | null> {
             await authUser.getIdToken();
           }
 
-          const snap = await getDoc(doc(db, 'households', id));
+          // With a saved copy on the phone, don't make the user wait for a slow network.
+          const hasLocalCopy = (await readLocal(PROFILE_KEY)) !== null;
+          const snap = await withTimeout(
+            getDoc(doc(db, 'households', id)),
+            hasLocalCopy ? REMOTE_READ_TIMEOUT_WITH_LOCAL_MS : REMOTE_READ_TIMEOUT_NO_LOCAL_MS,
+          );
+          if (snap === null) {
+            console.warn('[storage] Firestore read timed out, falling back to local cache');
+            return null;
+          }
           return snap.exists() ? (snap.data() as HouseholdDoc) : null;
         } catch (err) {
           const isLastAttempt = attempt === PERMISSION_DENIED_RETRY_DELAYS_MS.length;
