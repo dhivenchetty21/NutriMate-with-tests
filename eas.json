@@ -1,0 +1,33 @@
+{
+  "cli": {
+    "version": ">= 27.7.1",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_WORKER_URL": "https://nutrimate-live.dhiven-dev.workers.dev",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyD0jQjjcHmOB_jBiYv1xOqbO6hOc513x2w",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "nutrimate-c788a.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "nutrimate-c788a",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "nutrimate-c788a.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "1097311344700",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:1097311344700:web:85521ee0b0a88c1249cb39"
+      }
+    },
+    "production": {
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
