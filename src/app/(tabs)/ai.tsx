@@ -19,7 +19,7 @@ import { MealCard } from '../../components/ui/MealCard';
 import { PrimaryButton } from '../../components/ui/PrimaryButton';
 import { useAppState } from '../../context/AppContext';
 import { getAllDynamicRecipes, recipeCatalog, registerDynamicRecipes } from '../../data/recipes';
-import { generateAiMealPlan, getLastAiPlanError, isLiveBackendConfigured } from '../../services/liveApi';
+import { describeAiError, generateAiMealPlan, getLastAiPlanError, isLiveBackendConfigured } from '../../services/liveApi';
 import { saveCustomRecipes } from '../../services/storage';
 import { colors } from '../../theme/colors';
 import { screenPadding, spacing } from '../../theme/spacing';
@@ -98,11 +98,10 @@ export default function AiScreen() {
       } else {
         // Tell the user the live AI failed and local recipes are used instead.
         const reason = getLastAiPlanError();
+        console.log('[ai] plan failed:', reason);
         Alert.alert(
-          'Live AI unavailable right now',
-          reason
-            ? `Showing local recipes instead. Reason: ${reason}`
-            : 'Showing local recipes instead.',
+          'Live AI unavailable',
+          `${describeAiError(reason)}\n\nShowing local recipes instead.`,
         );
       }
     }

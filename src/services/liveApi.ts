@@ -31,6 +31,35 @@ export function getLastAiPlanError(): string | null {
   return lastAiPlanError;
 }
 
+export function describeAiError(reason: string | null): string {
+  const r = (reason ?? '').toLowerCase();
+  if (r.includes('503') || r.includes('unavailable') || r.includes('high demand') || r.includes('overloaded')) {
+    return 'The AI service is busy right now. Please try again in a minute.';
+  }
+  if (r.includes('429') || r.includes('quota') || r.includes('resource_exhausted')) {
+    return 'The AI has reached its usage limit for now. Please try again later.';
+  }
+  if (r.includes('timed out') || r.includes('abort')) {
+    return 'The AI took too long to answer.';
+  }
+  if (r.includes('could not reach') || r.includes('network request failed')) {
+    return 'The app could not reach the AI service. Check your internet connection.';
+  }
+  if (r.includes('401') || r.includes('403') || r.includes('api key') || r.includes('permission')) {
+    return 'The AI service refused the request. This is a problem on our side.';
+  }
+  if (r.includes('404') || r.includes('not found')) {
+    return 'The AI model is not available at the moment.';
+  }
+  if (r.includes('not configured')) {
+    return 'Live AI is not set up in this version of the app.';
+  }
+    if (r.includes('502') || r.includes('ai provider error')) {
+    return 'The AI service had a problem. Please try again in a minute.';
+  }
+  return 'The live AI gave an unexpected answer.';
+}
+
 export async function generateAiMealPlan(
   request: AiPlanRequest,
 ): Promise<AiPlanResult | null> {
