@@ -1,10 +1,3 @@
-// App state: profile, pantry, meal plan, budget and tracked prices, saved through storage.ts.
-import {
-  ActivityIndicator,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
 import {
   createContext,
   PropsWithChildren,
@@ -13,10 +6,17 @@ import {
   useMemo,
   useState,
 } from 'react';
+import {
+  ActivityIndicator,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
-import { useAuth } from './AuthContext';
+import { planDays } from '../data/mockData';
 import { getRecipeById, registerDynamicRecipes } from '../data/recipes';
-import { planDays, priceCheckedAt } from '../data/mockData';
+import { getDeviceId } from '../services/deviceId';
+import { fetchLivePrices, isLiveBackendConfigured } from '../services/liveApi';
 import {
   loadCustomPriceItems,
   loadCustomRecipes,
@@ -32,8 +32,6 @@ import {
   savePlanHistory,
   saveProfile,
 } from '../services/storage';
-import { getDeviceId } from '../services/deviceId';
-import { fetchLivePrices, isLiveBackendConfigured } from '../services/liveApi';
 import {
   addSharedTrackedItem,
   isSharedTrackingConfigured,
@@ -41,12 +39,6 @@ import {
   removeSharedTrackedItem,
   subscribeToSharedTrackedItems,
 } from '../services/trackedItems';
-import {
-  buildShoppingBasket,
-  countPantryMatches,
-  estimatePlanCost,
-} from '../utils/basket';
-import { setLivePackPrices } from '../utils/livePricing';
 import { colors } from '../theme/colors';
 import {
   CustomPriceItem,
@@ -55,6 +47,13 @@ import {
   PlannedMeal,
   UserProfile,
 } from '../types';
+import {
+  buildShoppingBasket,
+  countPantryMatches,
+  estimatePlanCost,
+} from '../utils/basket';
+import { setLivePackPrices } from '../utils/livePricing';
+import { useAuth } from './AuthContext';
 
 type AppContextValue = {
   isReady: boolean;
@@ -69,7 +68,6 @@ type AppContextValue = {
   monthlySpent: number;
   monthlyRemaining: number;
   weekSpent: number;
-  priceCheckedAt: string;
   planHistory: PlanHistoryEntry[];
   customPriceItems: CustomPriceItem[];
   addPantryItem: (name: string) => void;
@@ -89,21 +87,24 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: PropsWithChildren) {
   const { isAuthConfigured, isLoading: authLoading, user, displayName } = useAuth();
-  const [isReady, setIsReady] = useState(false);
+  // The account whose data is currently loaded. Data counts as ready only for that account,
+  // so right after a sign-in the old (signed-out) state is never treated as the user's data.
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [hasOnboarded, setHasOnboarded] = useState(true);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [pantryItems, setPantryItems] = useState<PantryItem[]>([]);
   const [plannedMeals, setPlannedMeals] = useState<PlannedMeal[]>([]);
   const [planHistory, setPlanHistory] = useState<PlanHistoryEntry[]>([]);
   const [customPriceItems, setCustomPriceItems] = useState<CustomPriceItem[]>([]);
-  // Changes when live prices arrive, so basket and plan costs recalculate.
+  // Bumped when live prices load, so the basket and plan cost recalculate.
   const [livePriceVersion, setLivePriceVersion] = useState(0);
 
-  // Load the signed-in user's data, and reload it whenever the user changes.
+  // Reload everything when the signed-in user changes (storage.ts reads that user's document).
   const authKey = isAuthConfigured ? user?.uid ?? 'signed-out' : 'local-only';
+  const isReady = loadedKey === authKey;
 
   useEffect(() => {
-    // Wait until Firebase knows who is signed in.
+    // Wait for Firebase to finish restoring the session before loading any data.
     if (isAuthConfigured && authLoading) {
       return;
     }
@@ -133,21 +134,22 @@ export function AppProvider({ children }: PropsWithChildren) {
         return;
       }
 
-      // Register saved AI recipes first so planned meals can find them by id.
+      // Register AI recipes first so saved meals can find their recipe by id.
       registerDynamicRecipes(savedCustomRecipes);
 
       setProfile(savedProfile);
       setPantryItems(savedPantry);
       setPlannedMeals(savedPlan);
+      console.log('[app] loaded', authKey, 'onboarded:', onboardingComplete, 'name:', savedProfile.userName);
       setHasOnboarded(onboardingComplete);
       setPlanHistory(savedPlanHistory);
 
       if (isSharedTrackingConfigured()) {
-        // Tracked items are shared (see trackedItems.ts). Move any older
-        // private items into the shared list.
+        // Tracked items are a shared pool kept live by the subscription below.
+        // Move this account's older private items into it (does nothing once migrated).
         if (isAuthConfigured && user && legacyPriceItems.length > 0) {
           migrateLegacyPriceItems(user.uid, legacyPriceItems).catch(() => {
-            // If this fails, it is retried at the next login.
+            // Migration retries on the next login.
           });
         }
       } else {
@@ -155,7 +157,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         setCustomPriceItems(legacyPriceItems);
       }
 
-      setIsReady(true);
+      setLoadedKey(authKey);
     }
 
     hydrate();
@@ -165,8 +167,8 @@ export function AppProvider({ children }: PropsWithChildren) {
     };
   }, [authKey, isAuthConfigured, authLoading, user]);
 
-  // Show the name entered at sign-up on Home and Profile. Accounts without a
-  // name use the first part of their email.
+  // The name shown on Home and Profile is the one entered at sign-up.
+  // Falls back to the start of the email if the account has no name.
   const registeredName = useMemo(() => {
     if (!isAuthConfigured || !user) return null;
     const named = (displayName ?? user.displayName)?.trim();
@@ -180,12 +182,12 @@ export function AppProvider({ children }: PropsWithChildren) {
     const updated = { ...profile, userName: registeredName };
     setProfile(updated);
     saveProfile(updated).catch(() => {
-      // If offline, it syncs on the next successful load.
+      // Syncs again on the next successful load.
     });
   }, [profile, registeredName]);
 
-  // Load live prices for staples (eggs, milk, bread, beef, chicken) once, so
-  // meal and basket costs use real shelf prices. Skipped without the Worker.
+  // Load live prices for tracked staples (eggs, milk, bread, beef, chicken).
+  // Skipped if the Worker is not configured.
   useEffect(() => {
     if (!isLiveBackendConfigured()) return;
     let cancelled = false;
@@ -199,7 +201,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
-  // Keep the shared tracked-items list up to date in real time (Firestore only).
+  // Live shared list of tracked price items: every user sees items added by any user.
   useEffect(() => {
     if (!isSharedTrackingConfigured()) return undefined;
     const unsubscribe = subscribeToSharedTrackedItems(setCustomPriceItems);
@@ -227,7 +229,8 @@ export function AppProvider({ children }: PropsWithChildren) {
     return Math.max(profile.weeklyBudget - planCost, 0);
   }, [profile, planCost]);
 
-  // Expected spend: this week's planned meals, and that amount over a month (~4.3 weeks).
+  // No purchases are tracked, so "spent" means the planned cost:
+  // this week's plan, and that projected over a month (about 4.3 weeks).
   const weekSpent = Math.round(planCost);
   const monthlySpent = Math.round(planCost * 4.3);
 
@@ -356,7 +359,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    // Save the current plan to history before replacing it (if it has meals).
+    // Save the plan being replaced into history (only if it had meals).
     if (plannedMeals.length > 0) {
       const historyEntry: PlanHistoryEntry = {
         id: `history-${Date.now()}`,
@@ -378,7 +381,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    // Save the current plan to history too, so restoring never loses it.
+    // The current plan goes into history too, so restoring never loses it.
     if (plannedMeals.length > 0) {
       const currentAsHistory: PlanHistoryEntry = {
         id: `history-${Date.now()}`,
@@ -399,7 +402,7 @@ export function AppProvider({ children }: PropsWithChildren) {
 
   async function addCustomPriceItem(item: CustomPriceItem) {
     if (isSharedTrackingConfigured()) {
-      // The live listener above updates the list for every user.
+      // Write to the shared list; the subscription updates the screen.
       const addedBy = user?.uid ?? (await getDeviceId());
       await addSharedTrackedItem(item, addedBy);
       return;
@@ -443,7 +446,6 @@ export function AppProvider({ children }: PropsWithChildren) {
         monthlySpent,
         monthlyRemaining,
         weekSpent,
-        priceCheckedAt,
         planHistory,
         customPriceItems,
         addPantryItem,
