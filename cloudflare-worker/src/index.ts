@@ -70,6 +70,8 @@ type InventedRecipe = {
 
 // Gemini model on Google AI Studio's free tier.
 const GEMINI_MODEL = 'gemini-3.8-flash';
+// Limit for the Gemini call. The app waits up to 45 seconds, so stop a little before that.
+const GEMINI_TIMEOUT_MS = 40000;
 
 const VALID_MEAL_TYPES = new Set(['Breakfast', 'Lunch', 'Dinner']);
 
@@ -206,30 +208,49 @@ async function handlePlan(request: Request, env: Env): Promise<Response> {
     budgetPerServing,
   });
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': env.GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        // Turn off "thinking" so the reply arrives within the app's timeout,
-        // and allow enough tokens for five full recipes.
-        generationConfig: {
-          maxOutputTokens: 3000,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      }),
+  const geminiBody = JSON.stringify({
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+    // Gemini 3.8 Flash cannot turn thinking off ("minimal" is not supported) and thinks at
+    // "medium" by default, which is slow. "low" keeps replies fast. maxOutputTokens leaves
+    // room for five full recipes.
+    generationConfig: {
+      maxOutputTokens: 3000,
+      thinkingConfig: { thinkingLevel: 'low' },
     },
-  );
+  });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': env.GEMINI_API_KEY,
+        },
+        body: geminiBody,
+        signal: controller.signal,
+      },
+    );
+  } catch (err) {
+    const reason = controller.signal.aborted
+      ? `timed out after ${GEMINI_TIMEOUT_MS}ms`
+      : String(err);
+    console.log(`[plan] ${GEMINI_MODEL} failed: ${reason}`);
+    return json({ error: 'AI provider error', detail: `${GEMINI_MODEL}: ${reason}` }, 502);
+  } finally {
+    clearTimeout(timer);
+  }
+  console.log(`[plan] ${GEMINI_MODEL} responded ${response.status} in ${Date.now() - startedAt}ms`);
 
   if (!response.ok) {
     const errText = await response.text();
-    return json({ error: 'AI provider error', detail: errText }, 502);
+    return json({ error: 'AI provider error', detail: errText.slice(0, 500) }, 502);
   }
 
   const data = (await response.json()) as {

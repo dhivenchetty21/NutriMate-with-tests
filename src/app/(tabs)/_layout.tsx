@@ -1,4 +1,3 @@
-// Bottom tab bar (Home, Meals, AI, Shop, Budget). Sends new users to onboarding first.
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Redirect, Tabs } from 'expo-router';
 import { ColorValue, Platform, StyleSheet, View } from 'react-native';
@@ -28,6 +27,7 @@ function TabIcon({
 
 export default function TabLayout() {
   const { hasOnboarded } = useAppState();
+  console.log('[tabs] hasOnboarded:', hasOnboarded);
 
   if (!hasOnboarded) {
     return <Redirect href="/onboarding" />;
